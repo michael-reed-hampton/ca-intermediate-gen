@@ -3,6 +3,21 @@
 
 echo "This script is based on 'https://jamielinux.com/docs/openssl-certificate-authority/index.html'"
 
+quiet="false"
+while [ $# -ne 0 ]
+do
+    arg="$1"
+    case "$arg" in
+        -quiet)
+            quiet="true"
+            ;;
+        *)
+            nothing="true"
+            ;;
+    esac
+    shift
+done
+
 echo \
 "A certificate authority (CA) is an entity that signs digital certificates. Many websites need to \
 let their customers know that the connection is secure, so they pay an internationally trusted CA \
@@ -24,24 +39,51 @@ used to create one or more intermediate CAs, which are trusted by the root CA to
 their behalf. This is best practice. It allows the root key to be kept offline and unused as much as \
 possible, as any compromise of the root key is disastrous.\
 "
-read -p "Press enter to continue"
+# We want to do the 'popd' before exiting in all cases.
+bail_out () {
+  popd
+  exit 1
+}
+press_a_key () {
+  if [[ ${quiet} != "true" ]]; then
+      read -p "Press enter to continue, or CTRL-C to abort."
+  fi
+}
+press_a_key
 
+# I want to set this up to be done by a script, so I have the values here.
+countryName=US
+stateOrProvinceName=Colorado
+localityName=Denver
+organizationName="Example Organization"
+organizationalUnitName="Engineering Division"
+emailAddress="example+certs@example.org"
+
+BASE_SUBJ="/emailAddress=${emailAddress}/C=${countryName}/ST=${stateOrProvinceName}/L=${localityName}/O=${organizationName}/OU=${organizationalUnitName}"
+
+ROOT_CA_PASS=rootcapass
+ROOT_CA_SUBJ="${BASE_SUBJ}/CN=Clover CDS Root CA"
+
+INTERMEDIATE_CA_PASS=intermediatecapass
+INTERMEDIATE_CA_SUBJ="${BASE_SUBJ}/CN=Clover CDS Intermediate CA"
+
+my_cur_dir="$PWD"
+echo ${my_cur_dir}
 pushd ~
-my_cur_dir=`$PWD`
 
 export BASE_CERT_DIR="$PWD"/certs
 echo "Choose a directory to store all keys and certificates."
 echo "Certificates and other info will be placed in directory '${BASE_CERT_DIR}'."
-read -p "Press enter to continue"
+press_a_key
 
 echo "!!!  ALERT   !!!  ALERT   !!!  ALERT   !!!  ALERT   !!!  ALERT   !!!"
 echo " The contents of '${BASE_CERT_DIR}' will be DELETED!"
-read -p "Press enter to continue, or CTRL-C to abort."
+press_a_key
 
 rm -rf ${BASE_CERT_DIR}
 if [ $? -ne 0 ] ; then
     echo "Unable to delete ${BASE_CERT_DIR}"
-    exit 1
+    bail_out
 fi
 
 echo \
@@ -50,67 +92,67 @@ of signed certificates."
 mkdir -p $BASE_CERT_DIR
 if [ $? -ne 0 ] ; then
     echo "Unable to create ${BASE_CERT_DIR}"
-    exit 1
+    bail_out
 fi
 
 mkdir -p ${BASE_CERT_DIR}/ca
 if [ $? -ne 0 ] ; then
     echo "Unable to create ${BASE_CERT_DIR}/ca"
-    exit 1
+    bail_out
 fi
 cd $BASE_CERT_DIR/ca
 if [ $? -ne 0 ] ; then
     echo "Unable to change dir to ${BASE_CERT_DIR}/ca"
-    exit 1
+    bail_out
 fi
 mkdir certs crl newcerts private
 if [ $? -ne 0 ] ; then
     echo "Unable to create directories {certs, crl, newcerts, private} in ${PWD}"
-    exit 1
+    bail_out
 fi
 
 chmod 700 private
 if [ $? -ne 0 ] ; then
     echo "Unable to make the directory 'private' in ${PWD} owner read/write/execute (chmod 700)"
-    exit 1
+    bail_out
 fi
 touch index.txt
 if [ $? -ne 0 ] ; then
     echo "Unable to create index.txt in ${PWD}"
-    exit 1
+    bail_out
 fi
 echo 1000 > serial
 if [ $? -ne 0 ] ; then
     echo "Unable to create 'serial' file in ${PWD}"
-    exit 1
+    bail_out
 fi
 
 echo "You must create a configuration file for OpenSSL to use."
 cp ${my_cur_dir}/root_ca_openssl.cnf $BASE_CERT_DIR/ca/openssl.cnf
 if [ $? -ne 0 ] ; then
     echo "Unable to copy 'root_ca_openssl.cnf' file in ${my_cur_dir} to ${BASE_CERT_DIR}/ca/openssl.cnf"
-    exit 1
+    bail_out
 fi
 cd ${BASE_CERT_DIR}/ca
 if [ $? -ne 0 ] ; then
     echo "Unable to change dir to ${BASE_CERT_DIR}/ca"
-    exit 1
+    bail_out
 fi
-read -p "Press enter to continue"
+press_a_key
 
 echo "Create the root key"
-openssl genrsa -aes256 -out private/ca.key.pem 4096
+openssl genrsa -aes256 -passout pass:${ROOT_CA_PASS} -out private/ca.key.pem 4096
 if [ $? -ne 0 ] ; then
     echo "Unable to generate the private key in ${PWD}/ca/private/ca.key.pem"
-    exit 1
+    bail_out
 fi
 
 chmod 400 private/ca.key.pem
 if [ $? -ne 0 ] ; then
     echo "Unable to make the private key in ${PWD}/ca/private/ca.key.pem owner read only (chmod 400)"
-    exit 1
+    bail_out
 fi
-read -p "Press enter to continue"
+press_a_key
 
 echo "Create the root certificate"
 # Whenever you use the req tool, you must specify a configuration
@@ -119,24 +161,26 @@ echo "Create the root certificate"
 cd ${BASE_CERT_DIR}/ca
 openssl req -config openssl.cnf \
       -key private/ca.key.pem \
+      -passin pass:${ROOT_CA_PASS} \
+      -subj "${ROOT_CA_SUBJ}" \
       -new -x509 -days 7300 -sha256 -extensions v3_ca \
       -out certs/ca.cert.pem
 if [ $? -ne 0 ] ; then
     echo "Unable to generate the root CA certificate."
-    exit 1
+    bail_out
 fi
 chmod 444 certs/ca.cert.pem
 if [ $? -ne 0 ] ; then
     echo "Unable to make the CA certificate in ${PWD}/certs/ca.cert.pem 'all' read only (chmod 444)"
-    exit 1
+    bail_out
 fi
-read -p "Press enter to continue"
+press_a_key
 
 echo "Verify the root certificate"
 openssl x509 -noout -text -in certs/ca.cert.pem
 if [ $? -ne 0 ] ; then
     echo "Unable to verify the CA certificate in ${PWD}/certs/ca.cert.pem"
-    exit 1
+    bail_out
 fi
 
 echo "Create the intermediate pair"
@@ -148,110 +192,117 @@ echo \
 "The purpose of using an intermediate CA is primarily for security. The root key can be kept offline and used \
 as infrequently as possible. If the intermediate key is compromised, the root CA can revoke the intermediate \
 certificate and create a new intermediate cryptographic pair."
-read -p "Press enter to continue"
+press_a_key
 
 echo "Prepare the directory"
 echo "Intermediate certificates and other info will be placed in directory '${BASE_CERT_DIR}/ca/intermediate'."
-read -p "Press enter to continue"
+press_a_key
 mkdir -p ${BASE_CERT_DIR}/ca/intermediate
 if [ $? -ne 0 ] ; then
     echo "Unable to create ${BASE_CERT_DIR}/ca/intermediate"
-    exit 1
+    bail_out
 fi
 
 cd ${BASE_CERT_DIR}/ca/intermediate
 if [ $? -ne 0 ] ; then
     echo "Unable to change dir to ${BASE_CERT_DIR}/ca/intermediate"
-    exit 1
+    bail_out
 fi
 mkdir certs crl csr newcerts private
 if [ $? -ne 0 ] ; then
     echo "Unable to create directories {certs, crl, newcerts, private} in ${PWD}"
-    exit 1
+    bail_out
 fi
 chmod 700 private
 if [ $? -ne 0 ] ; then
     echo "Unable to make the directory 'private' in ${PWD} owner read/write/execute (chmod 700)"
-    exit 1
+    bail_out
 fi
 
 touch index.txt
 if [ $? -ne 0 ] ; then
     echo "Unable to create index.txt in ${PWD}"
-    exit 1
+    bail_out
 fi
 echo 1000 > serial
 if [ $? -ne 0 ] ; then
     echo "Unable to create 'serial' file in ${PWD}"
-    exit 1
+    bail_out
 fi
 echo 1000 > ${BASE_CERT_DIR}/ca/intermediate/crlnumber
 if [ $? -ne 0 ] ; then
     echo "Unable to create 'crlnumber' file in ${BASE_CERT_DIR}/ca/intermediate"
-    exit 1
+    bail_out
 fi
 
 echo "You must create a configuration file for OpenSSL to use."
 cp ${my_cur_dir}/intermediate_ca_openssl.cnf ${BASE_CERT_DIR}/ca/intermediate/openssl.cnf
 if [ $? -ne 0 ] ; then
     echo "Unable to copy 'intermediate_ca_openssl.cnf' file in ${my_cur_dir} to ${BASE_CERT_DIR}/ca/intermediate/openssl.cnf"
-    exit 1
+    bail_out
 fi
 
 cd ${BASE_CERT_DIR}/ca
 if [ $? -ne 0 ] ; then
     echo "Unable to change dir to ${BASE_CERT_DIR}/ca"
-    exit 1
+    bail_out
 fi
-read -p "Press enter to continue"
+press_a_key
 
 echo "Create the intermediate key"
 openssl genrsa -aes256 \
+      -passout pass:${INTERMEDIATE_CA_PASS} \
       -out intermediate/private/intermediate.key.pem 4096
 if [ $? -ne 0 ] ; then
     echo "Unable to generate the private key in ${PWD}intermediate/private/intermediate.key.pem"
-    exit 1
+    bail_out
 fi
 
 chmod 400 intermediate/private/intermediate.key.pem
 if [ $? -ne 0 ] ; then
     echo "Unable to make the private key in ${PWD}/intermediate/private/intermediate.key.pem owner read only (chmod 400)"
-    exit 1
+    bail_out
 fi
-read -p "Press enter to continue"
+press_a_key
 
 echo "Create the intermediate certificate"
 cd $BASE_CERT_DIR/ca
 openssl req -config intermediate/openssl.cnf -new -sha256 \
       -key intermediate/private/intermediate.key.pem \
+      -passin pass:${INTERMEDIATE_CA_PASS} \
+      -subj "${INTERMEDIATE_CA_SUBJ}" \
       -out intermediate/csr/intermediate.csr.pem
 if [ $? -ne 0 ] ; then
-    exit 1
+    bail_out
 fi
 
+echo "Sign the CSR for the intermediate CA"
 cd $BASE_CERT_DIR/ca
+# below, '-batch' avoids the prompt
 openssl ca -config openssl.cnf -extensions v3_intermediate_ca \
       -days 3650 -notext -md sha256 \
+      -passin pass:${ROOT_CA_PASS} \
+      -batch \
       -in intermediate/csr/intermediate.csr.pem \
       -out intermediate/certs/intermediate.cert.pem
 if [ $? -ne 0 ] ; then
     echo "Unable to generate the intermediate CA certificate."
-    exit 1
+    bail_out
 fi
 
 chmod 444 intermediate/certs/intermediate.cert.pem
 if [ $? -ne 0 ] ; then
     echo "Unable to make the CA certificate in ${PWD}/intermediate/certs/intermediate.cert.pem 'all' read only (chmod 444)"
-    exit 1
+    bail_out
 fi
-read -p "Press enter to continue"
+press_a_key
 
 echo "Verify the intermediate certificate"
 openssl x509 -noout -text \
       -in intermediate/certs/intermediate.cert.pem
 if [ $? -ne 0 ] ; then
     echo "Unable to verify the CA certificate in ${PWD}/intermediate/certs/intermediate.cert.pem"
-    exit 1
+    bail_out
 fi
 
 echo "Verify the intermediate certificate against the root certificate. An OK indicates that the chain of trust is intact."
@@ -259,7 +310,7 @@ openssl verify -CAfile certs/ca.cert.pem \
       intermediate/certs/intermediate.cert.pem
 if [ $? -ne 0 ] ; then
     echo "Unable to verify the intermediate certificate against the root certificate"
-    exit 1
+    bail_out
 fi
 
 echo "Create the certificate chain file"
@@ -280,13 +331,13 @@ cat intermediate/certs/intermediate.cert.pem \
       certs/ca.cert.pem > intermediate/certs/ca-chain.cert.pem
 if [ $? -ne 0 ] ; then
     echo "Unable to concatenate the certificates!"
-    exit 1
+    bail_out
 fi
 
 chmod 444 intermediate/certs/ca-chain.cert.pem
 if [ $? -ne 0 ] ; then
     echo "Unable to make the CA certificate chain in ${PWD}/intermediate/certs/ca-chain.cert.pem 'all' read only (chmod 444)"
-    exit 1
+    bail_out
 fi
 
 echo \
